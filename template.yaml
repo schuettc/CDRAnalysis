@@ -1,0 +1,291 @@
+Parameters:
+  DatabaseUsername:
+    Type: String
+    Default: admin
+    Description: Name of the database user
+  DatabasePassword:
+    Type: String
+    Default: password!234
+    Description: Password for database
+    NoEcho: True
+  AppName:
+    Type: String
+    Default: CDRAnalysis
+    Description: Name of App Collection
+  LambdaCiDR:
+    Type: String
+    Default: 10.0.0.0/24
+    Description: CIDR Block for Lambdas
+  EmailNotifications:
+    Description: Email address for issue notification
+    Type: String
+    Default: court.schuett@gmail.com
+    ConstraintDescription: Enter a valid email address
+Resources:
+  CDRVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref LambdaCiDR
+      EnableDnsSupport: True
+      EnableDnsHostnames: True
+  CDRPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:   
+      CidrBlock: !Select [ 0, !Cidr [ !GetAtt CDRVPC.CidrBlock, 6, 5 ]]
+      VpcId: !Ref CDRVPC
+      AvailabilityZone: !Select 
+        - 0
+        - Fn::GetAZs: !Ref 'AWS::Region'
+  CDRPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Select [ 1, !Cidr [ !GetAtt CDRVPC.CidrBlock, 6, 5 ]]
+      VpcId: !Ref CDRVPC
+      AvailabilityZone: !Select 
+        - 1
+        - Fn::GetAZs: !Ref 'AWS::Region'     
+  CDRPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Select [ 2, !Cidr [ !GetAtt CDRVPC.CidrBlock, 6, 5 ]]
+      VpcId: !Ref CDRVPC
+      AvailabilityZone: !Select 
+        - 2
+        - Fn::GetAZs: !Ref 'AWS::Region'
+  VPCInternetGateway:
+    Type: AWS::EC2::InternetGateway
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref CDRVPC
+      InternetGatewayId: !Ref VPCInternetGateway
+  QuickSightSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: QuickSightSecurityGroup
+      GroupName: QuickSightSecurityGroup
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 52.15.247.160/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 52.23.63.224/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp:  54.70.204.128/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp:  52.66.193.64/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 13.124.145.32/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 13.229.254.0/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 54.153.249.96/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp:  13.113.244.32/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 15.223.73.0/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 35.158.127.192/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 52.210.255.224/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 35.177.218.0/27
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 18.230.46.192/27 
+      VpcId: !Ref CDRVPC
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: LambdaSecurityGroup
+      GroupName: LambdaSecurityGroup
+      VpcId: !Ref CDRVPC    
+  CDRDatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${AppName}-CDRSubnetGroup 
+      SubnetIds: 
+        - !Ref CDRPublicSubnet1
+        - !Ref CDRPublicSubnet2
+  CDRDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      VPCSecurityGroups:
+      - Ref: QuickSightSecurityGroup
+      - Ref: LambdaSecurityGroup
+      AllocatedStorage: '5'
+      DBSubnetGroupName: !Ref CDRDatabaseSubnetGroup
+      DBInstanceClass: db.t2.small
+      Engine: MySQL
+      MasterUsername: !Ref DatabaseUsername
+      MasterUserPassword: !Ref DatabasePassword
+      PubliclyAccessible: True
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete    
+    Properties:
+      BucketName: !Sub 'voiceconnectorlogs-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'aws:kms'
+              KMSMasterKeyID: KMS-KEY-ARN    
+  MySQLLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+        - nodejs12.x
+      Content:
+        S3Bucket: xpoc-libraries
+        S3Key: node_common.zip
+      Description: MySQL Library
+  CDRSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${AppName}-CDRReports
+      Subscription:
+      - Endpoint: !Ref EmailNotifications
+        Protocol: email
+  LambdaExecuteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-lambdarole
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+            - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+        Version: 2012-10-17
+      Policies:
+        - PolicyName: !Sub ${AppName}-VPCLambdaPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - "ec2:CreateNetworkInterface"
+                  - "ec2:DescribeNetworkInterfaces"
+                  - "ec2:DeleteNetworkInterface"
+                  - "ec2:AssignPrivateIpAddresses"
+                  - "ec2:UnassignPrivateIpAddresses"    
+                Resource: '*'
+        - PolicyName: !Sub ${AppName}-RDSPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "secretsmanager:GetSecretValue"
+                  - "secretsmanager:PutResourcePolicy"
+                  - "secretsmanager:PutSecretValue"
+                  - "secretsmanager:DeleteSecret"
+                  - "secretsmanager:DescribeSecret"
+                  - "secretsmanager:TagResource"
+                Resource: !Sub "arn:aws:secretsmanager:*:*:secret:rds-db-credentials/${CDRDatabase}"
+              - Effect: Allow
+                Action:
+                  - "dbqms:CreateFavoriteQuery"
+                  - "dbqms:DescribeFavoriteQueries"
+                  - "dbqms:UpdateFavoriteQuery"
+                  - "dbqms:DeleteFavoriteQueries"
+                  - "dbqms:GetQueryString"
+                  - "dbqms:CreateQueryHistory"
+                  - "dbqms:DescribeQueryHistory"
+                  - "dbqms:UpdateQueryHistory"
+                  - "dbqms:DeleteQueryHistory"
+                  - "rds-data:ExecuteSql"
+                  - "rds-data:ExecuteStatement"
+                  - "rds-data:BatchExecuteStatement"
+                  - "rds-data:BeginTransaction"
+                  - "rds-data:CommitTransaction"
+                  - "rds-data:RollbackTransaction"
+                  - "secretsmanager:CreateSecret"
+                  - "secretsmanager:ListSecrets"
+                  - "secretsmanager:GetRandomPassword"
+                  - "tag:GetResources"
+                Resource: !Sub "arn:aws:rds-db:*:*:dbuser:${CDRDatabase}/${DatabaseUsername}" 
+        - PolicyName: !Sub ${AppName}-SNSPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "sns:*"
+                Resource: !Ref CDRSNSTopic
+  ProcessCDRs:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: processCDRs.handler
+      Role: !GetAtt  LambdaExecuteRole.Arn
+      Layers: 
+        - !Ref MySQLLayer
+      Code:
+        S3Bucket: xpoc-libraries
+        S3Key: processCDRs.zip
+      Runtime: nodejs12.x
+      Timeout: 5
+      TracingConfig:
+        Mode: Active
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref CDRPrivateSubnet
+  generateReports:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: generateReports.handler
+      Role: !GetAtt  LambdaExecuteRole.Arn
+      Layers: 
+        - !Ref MySQLLayer
+      Environment:
+        Variables:
+          DATABASE_HOST: !GetAtt CDRDatabase.Endpoint.Address
+          DATABASE_USER: !Ref DatabaseUsername
+          DATABASE_PASSWORD: !Ref DatabasePassword
+      Code:
+        S3Bucket: xpoc-libraries
+        S3Key: generateReports.zip
+      Runtime: nodejs12.x
+      Timeout: 5
+      TracingConfig:
+        Mode: Active
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref CDRPrivateSubnet
+
